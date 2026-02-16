@@ -14,8 +14,8 @@ from telegram.ext import (
 # ================= CONFIG =================
 TOKEN = "8493844166:AAEN5c-Pu2jxzsuk8Di056hStdZixIjk1iY"
 OWNER_ID = 6361374151,8209644174 
-SECRET_KEY = b'ISI_SECRET_KEY_FERNET'
-
+SECRET_KEY = 
+b'0mBl7VBelC7fPvZsjj0l6RGxHDwrjlHZixYWUC68gPU='
 WIB = pytz.timezone("Asia/Jakarta")
 cipher = Fernet(SECRET_KEY)
 
