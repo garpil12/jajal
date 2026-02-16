@@ -12,8 +12,8 @@ from telegram.ext import (
 )
 
 # ================= CONFIG =================
-TOKEN = "ISI_TOKEN"
-OWNER_ID = 123456789
+TOKEN = "8493844166:AAEN5c-Pu2jxzsuk8Di056hStdZixIjk1iY"
+OWNER_ID = 6361374151,8209644174 
 SECRET_KEY = b'ISI_SECRET_KEY_FERNET'
 
 WIB = pytz.timezone("Asia/Jakarta")
@@ -69,7 +69,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("📦 List Produk", callback_data="list")]]
 
     await update.message.reply_text(
-        "🔥 WELCOME TO STORE BOT 🔥",
+        "🔥 WELCOME TO GARFIELD STORE 🔥",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
