@@ -240,6 +240,7 @@ app.add_handler(CallbackQueryHandler(buy, pattern="buy_"))
 app.add_handler(CallbackQueryHandler(acc, pattern="acc_"))
 app.add_handler(CallbackQueryHandler(cancel, pattern="cancel_"))
 app.add_handler(CommandHandler("broadcast", broadcast))
+app.add_handler(CommandHandler("addproduk", addproduk))  # <-- TAMBAH INI
 app.add_handler(MessageHandler(filters.PHOTO, bukti))
 
 app.run_polling()
