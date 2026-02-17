@@ -13,7 +13,7 @@ import io, zipfile
 # ================= CONFIG =================
 TOKEN = "YOUR_BOT_TOKEN"
 OWNER_IDS = [123456789, 987654321]  # ganti sesuai owner
-SECRET_KEY = b'YOUR_SECRET_KEY_32BYTE=='
+SECRET_KEY = b'0mBl7VBelC7fPvZsjj0l6RGxHDwrjlHZixYWUC68gPU='
 WIB = pytz.timezone("Asia/Jakarta")
 LOGS_CHAT_ID = -1001234567890  # ganti sesuai grup logs
 PAYMENT_INFO = """💳 PAYMENT INFO 💳
