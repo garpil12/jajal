@@ -13,9 +13,8 @@ from telegram.ext import (
 
 # ================= CONFIG =================
 TOKEN = "8493844166:AAEN5c-Pu2jxzsuk8Di056hStdZixIjk1iY"
-OWNER_ID = 6361374151,8209644174 
-SECRET_KEY = 
-b'0mBl7VBelC7fPvZsjj0l6RGxHDwrjlHZixYWUC68gPU='
+OWNER_IDS = [6361374151, 8209644174] 
+SECRET_KEY = b'0mBl7VBelC7fPvZsjj0l6RGxHDwrjlHZixYWUC68gPU='
 WIB = pytz.timezone("Asia/Jakarta")
 cipher = Fernet(SECRET_KEY)
 
@@ -54,8 +53,8 @@ conn.commit()
 
 # ================= ROLE =================
 def is_owner(uid):
-    return uid == OWNER_ID
-
+    return uid in OWNER_IDS
+    
 def is_admin(uid):
     cursor.execute("SELECT * FROM admins WHERE user_id=?", (uid,))
     return cursor.fetchone() or is_owner(uid)
