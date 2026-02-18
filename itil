@@ -1,0 +1,491 @@
+import sqlite3
+import logging
+from datetime import datetime
+import pytz
+from cryptography.fernet import Fernet
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup,
+    InputFile
+)
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
+    MessageHandler, ContextTypes, filters
+)
+import io, zipfile, os
+
+# ================= CONFIG =================
+TOKEN = "8493844166:AAE5bkaairwfXGD7pJCBZTQ7Dqy-mgM2gj8"
+OWNER_IDS = [8209644174,6361374151]  # Owner utama
+LOGS_CHAT_ID = -1001234567890
+
+SECRET_KEY = b'0mBl7VBelC7fPvZsjj0l6RGxHDwrjlHZixYWUC68gPU='
+cipher = Fernet(SECRET_KEY)
+
+WIB = pytz.timezone("Asia/Jakarta")
+
+PAYMENT_INFO = """💳 PAYMENT INFO
+- QRIS: https://ibb.co/xxx
+- SHOPEEPAY: 08123456789 a/n Garfield
+"""
+
+LOGO_URL = "https://i.ibb.co/logo.png"
+
+logging.basicConfig(level=logging.INFO)
+
+
+# ================= UTILS =================
+def now_wib():
+    return datetime.now(WIB).strftime("%d-%m-%Y %H:%M:%S WIB")
+
+def encrypt(text):
+    return cipher.encrypt(text.encode()).decode()
+
+def decrypt(text):
+    return cipher.decrypt(text.encode()).decode()
+
+def is_owner(uid):
+    return uid in OWNER_IDS
+
+def is_admin(uid):
+    cursor.execute("SELECT 1 FROM admins WHERE user_id=?", (uid,))
+    return cursor.fetchone() or is_owner(uid)
+
+
+# ================= DATABASE =================
+conn = sqlite3.connect("store.db", check_same_thread=False)
+cursor = conn.cursor()
+
+cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
+cursor.execute("CREATE TABLE IF NOT EXISTS admins (user_id INTEGER PRIMARY KEY)")
+
+cursor.execute("""CREATE TABLE IF NOT EXISTS categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nama TEXT UNIQUE
+)""")
+
+cursor.execute("""CREATE TABLE IF NOT EXISTS products (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nama TEXT,
+    harga INTEGER,
+    stok INTEGER,
+    kategori_id INTEGER,
+    deskripsi TEXT,
+    file TEXT
+)""")
+
+cursor.execute("""CREATE TABLE IF NOT EXISTS transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    product_id INTEGER,
+    status TEXT,
+    jumlah INTEGER,
+    bukti TEXT,
+    tanggal TEXT
+)""")
+
+conn.commit()
+
+# ================= START MENU =================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    cursor.execute("INSERT OR IGNORE INTO users VALUES (?)", (uid,))
+    conn.commit()
+
+    cursor.execute("SELECT * FROM categories")
+    cats = cursor.fetchall()
+
+    keyboard = []
+    for c in cats:
+        keyboard.append([InlineKeyboardButton(f"📂 {c[1]}", callback_data=f"cat_{c[0]}")])
+
+    keyboard += [
+        [InlineKeyboardButton("🛒 List Produk", callback_data="panel_produk")],
+        [InlineKeyboardButton("⚙️ Admin Panel", callback_data="admin_panel")],
+        [InlineKeyboardButton("❓ HELP", callback_data="help")]
+    ]
+
+    try:
+        await context.bot.send_photo(uid, LOGO_URL)
+    except:
+        pass
+
+    await update.message.reply_text(
+        "🔥 WELCOME TO GARFIELD STORE ULTRA 🔥\nPilih menu:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    await context.bot.send_message(
+        LOGS_CHAT_ID,
+        f"📥 User Start:\nID: {uid}\nUsername: @{update.effective_user.username}\n{now_wib()}"
+    )
+
+# ================= ADMIN PANEL =================
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    if not is_admin(q.from_user.id):
+        await q.answer("Khusus admin!", show_alert=True)
+        return
+
+    keyboard = [
+        [InlineKeyboardButton("📂 Kelola Kategori", callback_data="ap_kat")],
+        [InlineKeyboardButton("📦 Kelola Produk", callback_data="ap_prod")],
+        [InlineKeyboardButton("📨 Broadcast", callback_data="ap_bc")],
+        [InlineKeyboardButton("🔙 Kembali", callback_data="start_menu")]
+    ]
+
+    await q.edit_message_text(
+        "⚙️ **ADMIN PANEL GARFIELD STORE**",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# ================= HELP =================
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = f"""
+🔥 GARFIELD STORE BOT — HELP MENU 🔥
+
+📌 Commands Owner/Admin:
+/addkategori NamaKategori
+/delkategori IDKategori
+/listkategori
+
+/addproduk Nama|Harga|Stok|KategoriID|Deskripsi
+/delproduk IDProduk
+/listproduk
+
+/addfile IDProduk → upload file produk
+/broadcast Pesan
+
+User:
+/start
+/help
+
+💳 Payment Info:
+{PAYMENT_INFO}
+"""
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text)
+    else:
+        await update.message.reply_text(text)
+
+# ================= OWNER COMMANDS =================
+async def addkategori(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("/addkategori NamaKategori")
+        return
+    nama = " ".join(context.args)
+    cursor.execute("INSERT OR IGNORE INTO categories (nama) VALUES (?)", (nama,))
+    conn.commit()
+    await update.message.reply_text(f"✔️ Kategori '{nama}' ditambahkan.")
+
+async def delkategori(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update.effective_user.id):
+        return
+    try:
+        cid = int(context.args[0])
+        cursor.execute("DELETE FROM categories WHERE id=?", (cid,))
+        conn.commit()
+        await update.message.reply_text("Kategori dihapus.")
+    except:
+        await update.message.reply_text("Gunakan angka.")
+
+async def listkategori(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cursor.execute("SELECT * FROM categories")
+    data = cursor.fetchall()
+    if not data:
+        await update.message.reply_text("Belum ada kategori.")
+        return
+    txt = "📂 Daftar Kategori:\n"
+    for c in data:
+        txt += f"{c[0]}. {c[1]}\n"
+    await update.message.reply_text(txt)
+
+async def addproduk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update.effective_user.id):
+        return
+    try:
+        msg = update.message.text.partition(" ")[2]
+        nama, harga, stok, kategori, desk = [i.strip() for i in msg.split("|")]
+        harga = int(harga)
+        stok = int(stok)
+        kategori = int(kategori)
+        cursor.execute("INSERT INTO products VALUES (NULL,?,?,?,?,?,?)",
+                       (nama, harga, stok, kategori, desk, encrypt("")))
+        conn.commit()
+        await update.message.reply_text("✔️ Produk ditambahkan.")
+    except:
+        await update.message.reply_text("Format salah.")
+
+async def delproduk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update.effective_user.id):
+        return
+    pid = int(context.args[0])
+    cursor.execute("DELETE FROM products WHERE id=?", (pid,))
+    conn.commit()
+    await update.message.reply_text("Produk dihapus.")
+
+async def listproduk_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cursor.execute("SELECT p.id,p.nama,p.harga,p.stok,c.nama FROM products p LEFT JOIN categories c ON p.kategori_id=c.id")
+    data = cursor.fetchall()
+    if not data:
+        await update.message.reply_text("Belum ada produk.")
+        return
+    txt = "📦 Produk:\n"
+    for p in data:
+        txt += f"{p[0]}. {p[1]} | Rp{p[2]} | Stok:{p[3]} | Kategori:{p[4]}\n"
+    await update.message.reply_text(txt)
+
+# ================= ADD FILE PRODUK =================
+async def addfile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update.effective_user.id):
+        return
+
+    if not context.args:
+        await update.message.reply_text("/addfile IDProduk (kirim TEXT file)")
+        return
+
+    pid = int(context.args[0])
+
+    if update.message.document:
+        file = await update.message.document.get_file()
+        raw = await file.download_as_bytearray()
+        content = raw.decode()
+    else:
+        content = update.message.text.partition(" ")[2]
+
+    cursor.execute("SELECT file FROM products WHERE id=?", (pid,))
+    old = cursor.fetchone()
+    old_data = decrypt(old[0]) if old else ""
+
+    new_data = old_data + "\n" + content
+    cursor.execute("UPDATE products SET file=? WHERE id=?", (encrypt(new_data), pid))
+    conn.commit()
+
+    await update.message.reply_text("✔️ File ditambahkan ke produk.")
+
+# ================= USER MENU — LIST PRODUK =================
+async def list_produk_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    cursor.execute("SELECT id,nama FROM products WHERE stok>0")
+    prods = cursor.fetchall()
+
+    if not prods:
+        await q.edit_message_text("Belum ada produk tersedia.")
+        return
+
+    kb = []
+    for p in prods:
+        kb.append([InlineKeyboardButton(f"{p[1]}", callback_data=f"detail_{p[0]}")])
+
+    kb.append([InlineKeyboardButton("🔙 Kembali", callback_data="start_menu")])
+
+    await q.edit_message_text("📦 *PRODUK TERSEDIA*",
+                              reply_markup=InlineKeyboardMarkup(kb))
+
+# ================= DETAIL PRODUK =================
+async def detail_produk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    pid = int(q.data.split("_")[1])
+    cursor.execute("SELECT * FROM products WHERE id=?", (pid,))
+    p = cursor.fetchone()
+
+    kb = [
+        [InlineKeyboardButton("🛒 BELI", callback_data=f"buy_{pid}")],
+        [InlineKeyboardButton("🔙 Kembali", callback_data="panel_produk")]
+    ]
+
+    txt = f"""
+📦 *{p[1]}*
+💰 Harga: Rp{p[2]}
+📦 Stok: {p[3]}
+📝 Deskripsi:
+{p[5]}
+
+{PAYMENT_INFO}
+"""
+
+    await q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
+
+# ================= BUY PRODUK =================
+async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    uid = q.from_user.id
+    pid = int(q.data.split("_")[1])
+
+    cursor.execute("SELECT 1 FROM transactions WHERE user_id=? AND status='PENDING'", (uid,))
+    if cursor.fetchone():
+        await q.answer("Masih ada transaksi pending!", show_alert=True)
+        return
+
+    cursor.execute("SELECT stok FROM products WHERE id=?", (pid,))
+    stok = cursor.fetchone()[0]
+    if stok <= 0:
+        await q.answer("Stok habis!", show_alert=True)
+        return
+
+    cursor.execute("INSERT INTO transactions VALUES (NULL,?,?,?,?,?,?)",
+                   (uid, pid, "PENDING", None, None, now_wib()))
+    conn.commit()
+
+    await q.edit_message_text("Silakan kirim bukti transfer.")
+    await context.bot.send_message(
+        LOGS_CHAT_ID,
+        f"🛒 New Order PENDING:\nUser:{uid}\nPID:{pid}\n{now_wib()}"
+    )
+
+# ================= PHOTO BUKTI =================
+async def bukti(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.message.from_user.id
+
+    cursor.execute("SELECT id,product_id FROM transactions WHERE user_id=? AND status='PENDING'", (uid,))
+    trx = cursor.fetchone()
+
+    if not trx:
+        await update.message.reply_text("Tidak ada transaksi pending.")
+        return
+
+    trx_id, pid = trx
+
+    mem_zip = io.BytesIO()
+    with zipfile.ZipFile(mem_zip, 'w') as zipf:
+        for i, photo in enumerate(update.message.photo):
+            f = await photo.get_file()
+            byte = await f.download_as_bytearray()
+            zipf.writestr(f"bukti_{i+1}.jpg", byte)
+    mem_zip.seek(0)
+
+    kb = [
+        [InlineKeyboardButton("✔️ ACC", callback_data=f"acc_{trx_id}")],
+        [InlineKeyboardButton("❌ CANCEL", callback_data=f"cancel_{trx_id}")]
+    ]
+
+    admins = set(OWNER_IDS)
+    cursor.execute("SELECT user_id FROM admins")
+    admins |= {x[0] for x in cursor.fetchall()}
+
+    for aid in admins:
+        try:
+            await context.bot.send_document(
+                aid,
+                InputFile(mem_zip, filename=f"bukti_{trx_id}.zip"),
+                caption=f"TRX:{trx_id}\nUSER:{uid}\nPID:{pid}\n{now_wib()}",
+                reply_markup=InlineKeyboardMarkup(kb)
+            )
+        except:
+            pass
+
+    await update.message.reply_text("Bukti dikirim ke admin.")
+
+# ================= ACC / CANCEL =================
+async def acc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    if not is_admin(q.from_user.id):
+        await q.answer("Bukan admin.", show_alert=True)
+        return
+
+    trx_id = int(q.data.split("_")[1])
+
+    cursor.execute("SELECT user_id,product_id FROM transactions WHERE id=?", (trx_id,))
+    uid, pid = cursor.fetchone()
+
+    cursor.execute("SELECT file,nama FROM products WHERE id=?", (pid,))
+    file_enc, prod_name = cursor.fetchone()
+
+    decrypted = decrypt(file_enc).strip().split("\n")
+    send_data = decrypted[0] if decrypted else "KOSONG"
+    remain = "\n".join(decrypted[1:])
+
+    cursor.execute("UPDATE products SET file=?,stok=stok-1 WHERE id=?",
+                   (encrypt(remain), pid))
+    cursor.execute("UPDATE transactions SET status='SUCCESS' WHERE id=?", (trx_id,))
+    conn.commit()
+
+    await context.bot.send_message(uid, f"✔️ Pembelian sukses!\nBarang:\n{send_data}")
+    await context.bot.send_message(LOGS_CHAT_ID, f"ACC TRX:{trx_id}\nUser:{uid}\n{now_wib()}")
+
+    await q.edit_message_caption("✔️ ACC berhasil.")
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    if not is_admin(q.from_user.id):
+        await q.answer("Bukan admin.", show_alert=True)
+        return
+
+    trx_id = int(q.data.split("_")[1])
+    cursor.execute("UPDATE transactions SET status='CANCEL' WHERE id=?", (trx_id,))
+    conn.commit()
+
+    await q.edit_message_caption("❌ Transaksi dibatalkan.")
+
+# ================= BROADCAST =================
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update.effective_user.id):
+        return
+
+    msg = " ".join(context.args)
+    cursor.execute("SELECT user_id FROM users")
+    users = cursor.fetchall()
+
+    for u in users:
+        try:
+            await context.bot.send_message(u[0], msg)
+        except:
+            pass
+
+    await update.message.reply_text("Broadcast selesai.")
+
+# ================= CALLBACK ROUTER =================
+async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+
+    if q.data == "start_menu":
+        await start(q, context)
+    elif q.data == "help":
+        await help_cmd(update, context)
+    elif q.data == "panel_produk":
+        await list_produk_menu(update, context)
+    elif q.data.startswith("cat_"):
+        await list_produk_menu(update, context)
+    elif q.data.startswith("detail_"):
+        await detail_produk(update, context)
+    elif q.data.startswith("buy_"):
+        await buy(update, context)
+    elif q.data.startswith("acc_"):
+        await acc(update, context)
+    elif q.data.startswith("cancel_"):
+        await cancel(update, context)
+    elif q.data == "admin_panel":
+        await admin_panel(update, context)
+
+# ================= MAIN =================
+app = ApplicationBuilder().token(TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("help", help_cmd))
+
+app.add_handler(CommandHandler("addkategori", addkategori))
+app.add_handler(CommandHandler("delkategori", delkategori))
+app.add_handler(CommandHandler("listkategori", listkategori))
+app.add_handler(CommandHandler("addproduk", addproduk))
+app.add_handler(CommandHandler("delproduk", delproduk))
+app.add_handler(CommandHandler("listproduk", listproduk_owner))
+app.add_handler(CommandHandler("addfile", addfile))
+app.add_handler(CommandHandler("broadcast", broadcast))
+
+app.add_handler(CallbackQueryHandler(router))
+app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, bukti))
+
+app.run_polling()
